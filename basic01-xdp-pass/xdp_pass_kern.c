@@ -14,6 +14,7 @@
 /* Defines xdp_stats_map */
 #include "../common/xdp_stats_kern_user.h"
 #include "../common/xdp_stats_kern.h"
+#include "kern_define.h"
 
 #define bpf_printk(fmt, ...)                                    \
 ({                                                              \
@@ -21,6 +22,18 @@
 	bpf_trace_printk(____fmt, sizeof(____fmt),              \
                          ##__VA_ARGS__);                        \
 })
+
+#ifndef classify
+#define classify 0
+#endif
+
+#ifndef transport 
+#define transport 0
+#endif
+
+#ifndef port
+#define port 0
+#endif
 
 /* Header cursor to keep track of current parsing position */
 struct hdr_cursor {
@@ -51,6 +64,8 @@ static __always_inline int parse_ethhdr(struct hdr_cursor *nh,
 
 	nh->pos += hdrsize;
 	*ethhdr = eth;
+//数字为1时过滤显示传输层协议为UDP的数据包；数字为2时过滤显示传输层协议为TCP的数据包；数字为3时过滤显示网络层为IP协议的数据包。
+//网络流量控制规则由NET,TRANSORT,PORT共同组成。NET默认为0,表示不过滤网络层数据包，为1时表示只接收网络层为IP协议的数据包；TRANSPORT默认为0,表示不过滤传输层数据包，为1时表示只接受传输层为UDP的数据包，为2时表示只接受传输层为TCP的数据包；PORT默认为0,表示未指定接收固定端口，其余表示指定接受某个端口的数据包。指定端口需要指定传输层协议。
 
 	return eth->h_proto; /* network-byte-order */
 }
@@ -87,6 +102,7 @@ static __always_inline int parse_tcphdr(struct hdr_cursor *nh,
 					void *data_end,
 					struct tcphdr **tcphdr)
 {
+	int flag = 1;
 	int len;
 	struct tcphdr *h = nh->pos;
 
@@ -102,10 +118,20 @@ static __always_inline int parse_tcphdr(struct hdr_cursor *nh,
 	if (nh->pos + len > data_end)
 		return -1;
 
+	bpf_printk("tcp: %d %d", bpf_ntohs(h->source), bpf_ntohs(h->dest));
+	
+	if (transport == 2 && port != 0) {
+		flag = -1;
+		 if (h->dest == bpf_htons(port) || h->source == bpf_htons(port) ) {
+	        return 1;
+   	 }
+	}
+
 	nh->pos += len;
 	*tcphdr = h;
 
-	return len;
+	// return len;
+	return flag;
 }
 
 
@@ -129,19 +155,25 @@ static __always_inline int parse_udphdr(struct hdr_cursor *nh,
 	if (len < 0)
 		return -1;
 
-	return len;
+	bpf_printk("udp: %d %d", bpf_ntohs(h->source), bpf_ntohs(h->dest));
+	if (transport == 1 && port != 0) {
+		 if (h->dest == bpf_htons(port) || h->source == bpf_htons(port) ) {
+	        return -1;
+   	 	}
+	}
+	return 1;
 }
 
-/* to u64 in host order */
-static inline __u64 ether_addr_to_u64(const __u8 *addr)
-{
-	__u64 u = 0;
-	int i;
+// /* to u64 in host order */
+// static inline __u64 ether_addr_to_u64(const __u8 *addr)
+// {
+// 	__u64 u = 0;
+// 	int i;
 
-	for (i = ETH_ALEN - 1; i >= 0; i--)
-		u = u << 8 | addr[i];
-	return u;
-}
+// 	for (i = ETH_ALEN - 1; i >= 0; i--)
+// 		u = u << 8 | addr[i];
+// 	return u;
+// }
 
 SEC("xdp")
 int  xdp_prog_simple(struct xdp_md *ctx)
@@ -158,10 +190,10 @@ int  xdp_prog_simple(struct xdp_md *ctx)
 	if ((void *)eth + offset > data_end)
 		return 0;
 
-	bpf_printk("src: %llu, dst: %llu, proto: %u\n",
-		   ether_addr_to_u64(eth->h_source),
-		   ether_addr_to_u64(eth->h_dest),
-		   bpf_ntohs(eth->h_proto));
+	// bpf_printk("src: %llu, dst: %llu, proto: %u\n",
+	// 	   ether_addr_to_u64(eth->h_source),
+	// 	   ether_addr_to_u64(eth->h_dest),
+	// 	   bpf_ntohs(eth->h_proto));
 
 	struct hdr_cursor nh;
 	int nh_type;
@@ -173,28 +205,25 @@ int  xdp_prog_simple(struct xdp_md *ctx)
 	 * parsing fails. Each helper function does sanity checking (is the
 	 * header type in the packet correct?), and bounds checking.
 	 */
-	__u32 action = XDP_PASS; 
+	__u32 action = XDP_DROP; 
 	nh_type = parse_ethhdr(&nh, data_end, &eth);
 
 	if (nh_type == bpf_htons(ETH_P_IP)) {
 		nh_type = parse_iphdr(&nh, data_end, &iphdr);
-		bpf_printk("ip");
-		bpf_printk("ip: %d, %d", bpf_ntohs(iphdr->saddr),  bpf_ntohs(iphdr->daddr));
-		if (nh_type == IPPROTO_TCP) {
-			if (parse_tcphdr(&nh, data_end, &tcphdr) < 0) {
-				action = XDP_ABORTED;
+		// bpf_printk("ip");
+		if (classify != 1 && nh_type == IPPROTO_TCP) {
+			if (transport != 1  && parse_tcphdr(&nh, data_end, &tcphdr) > 0) {
+				action = XDP_PASS;
+			} 
+		} else if (classify != 2 && nh_type == IPPROTO_UDP) {
+			if (transport != 2 && parse_udphdr(&nh, data_end, &udphdr) > 0) {
+				action = XDP_PASS;
 			}
-			action = XDP_PASS;
-			// bpf_printk("tcp: %d %d", bpf_ntohs(tcphdr->source), bpf_ntohs(tcphdr->dest));
-		} else if (nh_type == IPPROTO_UDP) {
-			if (parse_udphdr(&nh, data_end, &udphdr) < 0) {
-				action = XDP_ABORTED;
-			}
-			action = XDP_DROP;
-			bpf_printk("udp");
 		}
+	} else {
+		action = XDP_PASS;
 	}
-	bpf_printk("nh_type: 0x%x", nh_type);
+	// bpf_printk("nh_type: 0x%x", nh_type);
 	return xdp_stats_record_action(ctx, action);
 	// return XDP_PASS;
 }

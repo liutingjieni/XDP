@@ -42,28 +42,28 @@ int main(int argc, char **argv)
 		unsigned int proto;
 
 		printf("%s", line);
-		tok = strtok_r(line, " ", &saveptr);
+		// tok = strtok_r(line, " ", &saveptr);
 
-		while (tok) {
-			if (!strncmp(tok, "src:", 4)) {
-				tok = strtok_r(NULL, " ", &saveptr);
-				print_ether_addr("src", tok);
-			}
+		// while (tok) {
+		// 	if (!strncmp(tok, "src:", 4)) {
+		// 		tok = strtok_r(NULL, " ", &saveptr);
+		// 		print_ether_addr("src", tok);
+		// 	}
 
-			if (!strncmp(tok, "dst:", 4)) {
-				tok = strtok_r(NULL, " ", &saveptr);
-				print_ether_addr("dst", tok);
-			}
+		// 	if (!strncmp(tok, "dst:", 4)) {
+		// 		tok = strtok_r(NULL, " ", &saveptr);
+		// 		print_ether_addr("dst", tok);
+		// 	}
 
-			if (!strncmp(tok, "proto:", 5)) {
-				tok = strtok_r(NULL, " ", &saveptr);
-				if (1 == sscanf(tok, "%u", &proto))
-					printf("proto: %u", proto);
-			}
-			tok = strtok_r(NULL, " ", &saveptr);
-		}
+		// 	if (!strncmp(tok, "proto:", 5)) {
+		// 		tok = strtok_r(NULL, " ", &saveptr);
+		// 		if (1 == sscanf(tok, "%u", &proto))
+		// 			printf("proto: %u", proto);
+		// 	}
+		// 	tok = strtok_r(NULL, " ", &saveptr);
+		// }
 
-		printf("\n");
+		// printf("\n");
 	}
 
 	free(line);
